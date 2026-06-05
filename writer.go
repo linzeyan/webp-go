@@ -35,9 +35,11 @@ import (
 //     VP8L (lossless), preserving existing behavior byte-for-byte.
 //   - Quality: Lossy quality in [0, 100]. Higher values preserve more
 //     detail. Default (when zero) is 75. Ignored when Lossy is false.
-//   - Method: Lossy speed/quality tradeoff in [0, 6]. Higher values spend
-//     more time searching for better compression. Default 4. Ignored when
-//     Lossy is false.
+//   - Method: For lossy, the speed/quality tradeoff in [0, 6]; higher values
+//     spend more time searching for better compression (default 4). For
+//     lossless, Method doubles as an effort knob: 0 keeps the fast default
+//     output, while any positive value searches for the smallest color-cache
+//     size (slower, smaller; the decoded pixels are unchanged either way).
 //   - ICCProfile: Raw ICC color-profile bytes. When non-empty they are
 //     emitted as an ICCP chunk (before the image data) inside a VP8X
 //     container. Empty means no profile is written.
@@ -108,7 +110,7 @@ func EncodeContext(ctx context.Context, w io.Writer, img image.Image, o *Options
         return encodeLossy(ctx, w, img, o)
     }
 
-    stream, hasAlpha, err := writeBitStream(img)
+    stream, hasAlpha, err := writeBitStream(img, losslessEffort(o))
     if err != nil {
         return err
     }
@@ -254,7 +256,7 @@ func encodeAlphaVP8L(alpha []byte, w, h int) ([]byte, error) {
             img.Pix[(y*w+x)*4+3] = 0xff         // fully opaque
         }
     }
-    stream, _, err := writeBitStream(img)
+    stream, _, err := writeBitStream(img, 0)
     if err != nil {
         return nil, err
     }
@@ -467,7 +469,7 @@ func writeFrames(ctx context.Context, ani *Animation, o *Options) (*bytes.Buffer
             }
             writeChunkVP8(&framePayload, vp8.Bytes())
         } else {
-            stream, a, err := writeBitStream(img)
+            stream, a, err := writeBitStream(img, method)
             if err != nil {
                 return nil, false, err
             }
@@ -508,7 +510,18 @@ func writeFrames(ctx context.Context, ani *Animation, o *Options) (*bytes.Buffer
     return buf, hasAlpha, nil
 }
 
-func writeBitStream(img image.Image) (*bytes.Buffer, bool, error) {
+// losslessEffort maps Options to the VP8L encoder effort. 0 (the default and
+// the nil-Options case) keeps the fast, historically-stable output; a positive
+// value opts into the color-cache search in writeBitStreamData. Method is
+// reused as the lossless effort knob (it otherwise only affects lossy).
+func losslessEffort(o *Options) int {
+    if o == nil {
+        return 0
+    }
+    return o.Method
+}
+
+func writeBitStream(img image.Image, effort int) (*bytes.Buffer, bool, error) {
     if img == nil {
         return nil, false, errors.New("image is nil")
     }
@@ -537,7 +550,7 @@ func writeBitStream(img image.Image) (*bytes.Buffer, bool, error) {
     transforms[transformSubGreen] = !isIndexed
     transforms[transformColorIndexing] = isIndexed
 
-    err := writeBitStreamData(s, rgba, 4, transforms)
+    err := writeBitStreamData(s, rgba, 4, effort, transforms)
     if err != nil {
         return nil, false, err
     }
@@ -566,7 +579,7 @@ func writeBitStreamHeader(w *bitWriter, bounds image.Rectangle, hasAlpha bool) {
     w.writeBits(0, 3)
 }
 
-func writeBitStreamData(w *bitWriter, img image.Image, colorCacheBits int, transforms [4]bool) error {
+func writeBitStreamData(w *bitWriter, img image.Image, colorCacheBits, effort int, transforms [4]bool) error {
     pixels, err := flatten(img)
     if err != nil {
         return err
@@ -618,9 +631,39 @@ func writeBitStreamData(w *bitWriter, img image.Image, colorCacheBits int, trans
     }
 
     w.writeBits(0, 1) // end of transform
-    writeImageData(w, pixels, width, height, true, colorCacheBits)
+
+    // The main image data dominates the output. With a non-zero effort,
+    // search for the color-cache size that encodes it smallest instead of
+    // using the fixed default; the result is byte-different but always
+    // losslessly decodable. effort 0 preserves the historical output.
+    mainCacheBits := colorCacheBits
+    if effort > 0 {
+        mainCacheBits = bestMainCacheBits(pixels, width, height)
+    }
+    writeImageData(w, pixels, width, height, true, mainCacheBits)
 
     return nil
+}
+
+// maxLosslessCacheBits is the largest VP8L color-cache size (in bits) the
+// search considers. The spec allows 1..11; 0 means no cache.
+const maxLosslessCacheBits = 11
+
+// bestMainCacheBits returns the color-cache size (in bits, 0 = no cache) that
+// encodes the main image data smallest. It trial-encodes the pixels with each
+// candidate size into a throwaway bit writer and keeps the cheapest. Because
+// VP8L is lossless, the choice only affects size, never the decoded pixels.
+func bestMainCacheBits(pixels []color.NRGBA, width, height int) int {
+    best, bestBits := 0, -1
+    for cb := 0; cb <= maxLosslessCacheBits; cb++ {
+        scratch := &bitWriter{Buffer: &bytes.Buffer{}}
+        writeImageData(scratch, pixels, width, height, true, cb)
+        bits := scratch.Buffer.Len()*8 + scratch.BitBufferSize
+        if bestBits < 0 || bits < bestBits {
+            best, bestBits = cb, bits
+        }
+    }
+    return best
 }
 
 func writeImageData(w *bitWriter, pixels []color.NRGBA, width, height int, isRecursive bool, colorCacheBits int) {
