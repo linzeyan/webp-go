@@ -5,6 +5,7 @@ import (
     //general
     //------------------------------
     "bytes"
+    "context"
     "reflect"
     //------------------------------
     //imaging
@@ -478,7 +479,7 @@ func TestWriteFramesErrors(t *testing.T) {
             "invalid image size",
         },
     }{
-        _, _, err := writeFrames(tt.ani, nil)
+        _, _, err := writeFrames(context.Background(), tt.ani, nil)
         if err == nil {
             t.Errorf("test %v: expected error %v got nil", id, tt.expectedMsg)
             continue
@@ -626,7 +627,7 @@ func TestWriteFrames(t *testing.T) {
         },
     }{
         
-        buffer, alpha, err := writeFrames(tt.ani, nil)
+        buffer, alpha, err := writeFrames(context.Background(), tt.ani, nil)
         if err != nil {
             t.Errorf("test %v: unexpected error %v", id, err)
             continue

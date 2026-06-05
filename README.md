@@ -79,6 +79,17 @@ err := gowebp.Encode(f, img, &gowebp.Options{
 })
 ```
 
+### Cancellation
+
+`EncodeContext` and `EncodeAllContext` accept a `context.Context` and
+abort with `ctx.Err()` when it is cancelled. Cancellation is polled
+before each animation frame and between macroblock rows of a lossy
+image; a lossless single image runs to completion once started.
+
+```go
+err := gowebp.EncodeContext(ctx, f, img, &gowebp.Options{Lossy: true})
+```
+
 ### Decoding
 
 ```go

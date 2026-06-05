@@ -2,6 +2,7 @@ package vp8enc
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"image"
@@ -36,6 +37,12 @@ const (
 // coefficient coding. Mode selection is SSE-based. I4 modes (10 per MB)
 // and rate-distortion optimization are later-phase work.
 func EncodeFrame(w io.Writer, img image.Image, opts EncodeOptions) error {
+	return EncodeFrameContext(context.Background(), w, img, opts)
+}
+
+// EncodeFrameContext is EncodeFrame with cooperative cancellation: it returns
+// ctx.Err() if ctx is cancelled, polled between macroblock rows.
+func EncodeFrameContext(ctx context.Context, w io.Writer, img image.Image, opts EncodeOptions) error {
 	if img == nil {
 		return errors.New("vp8enc: nil image")
 	}
@@ -54,7 +61,9 @@ func EncodeFrame(w io.Writer, img image.Image, opts EncodeOptions) error {
 	quant := NewQuantizer(baseQ)
 
 	enc := newEncState(frame, quant, opts)
-	enc.encodeAllMBs()
+	if err := enc.encodeAllMBs(ctx); err != nil {
+		return err
+	}
 
 	// Partition 0: frame-level header + per-MB modes.
 	p0 := NewBoolEncoder()
@@ -172,8 +181,14 @@ func EncodeFrame(w io.Writer, img image.Image, opts EncodeOptions) error {
 
 // EncodeWebP wraps EncodeFrame in the RIFF/WEBP/VP8 container format.
 func EncodeWebP(w io.Writer, img image.Image, opts EncodeOptions) error {
+	return EncodeWebPContext(context.Background(), w, img, opts)
+}
+
+// EncodeWebPContext is EncodeWebP with cooperative cancellation forwarded to
+// the frame encoder (polled between macroblock rows).
+func EncodeWebPContext(ctx context.Context, w io.Writer, img image.Image, opts EncodeOptions) error {
 	var vp8 bytes.Buffer
-	if err := EncodeFrame(&vp8, img, opts); err != nil {
+	if err := EncodeFrameContext(ctx, &vp8, img, opts); err != nil {
 		return err
 	}
 	chunkLen := vp8.Len()
@@ -263,14 +278,18 @@ func newEncState(frame *Frame, quant Quantizer, opts EncodeOptions) *encState {
 // encodeAllMBs walks every macroblock in raster order, picks intra modes
 // by SSE, performs the full predict→residual→transform→quantize→recon
 // pipeline, and emits residual tokens to the partition-1 coder.
-func (s *encState) encodeAllMBs() {
+func (s *encState) encodeAllMBs(ctx context.Context) error {
 	for mby := 0; mby < s.frame.MBHeight; mby++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		s.leftNZ = 0
 		s.leftNZY2 = 0
 		for mbx := 0; mbx < s.frame.MBWidth; mbx++ {
 			s.encodeOneMB(mbx, mby)
 		}
 	}
+	return nil
 }
 
 // --- Neighbor accessors -----------------------------------------------

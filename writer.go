@@ -6,6 +6,7 @@ import (
     //------------------------------
     "io"
     "bytes"
+    "context"
     "encoding/binary"
     //------------------------------
     //imaging
@@ -91,8 +92,20 @@ type Animation struct {
 // Returns:
 //   An error if encoding fails or writing to the io.Writer encounters an issue.
 func Encode(w io.Writer, img image.Image, o *Options) error {
+    return EncodeContext(context.Background(), w, img, o)
+}
+
+// EncodeContext behaves like Encode but aborts early, returning ctx.Err(),
+// when ctx is cancelled. Cancellation is checked before encoding starts; a
+// lossy single-image encode is additionally polled between macroblock rows.
+// A lossless single-image encode runs to completion once started (it is fast;
+// guard against oversized inputs with an explicit size limit instead).
+func EncodeContext(ctx context.Context, w io.Writer, img image.Image, o *Options) error {
+    if err := ctx.Err(); err != nil {
+        return err
+    }
     if o != nil && o.Lossy {
-        return encodeLossy(w, img, o)
+        return encodeLossy(ctx, w, img, o)
     }
 
     stream, hasAlpha, err := writeBitStream(img)
@@ -134,7 +147,7 @@ func Encode(w io.Writer, img image.Image, o *Options) error {
 // alpha, the VP8 (opaque color) chunk is paired with an ALPH chunk
 // carrying the alpha plane inside a VP8X container (spec section 2 /
 // WebP container spec "Alpha").
-func encodeLossy(w io.Writer, img image.Image, o *Options) error {
+func encodeLossy(ctx context.Context, w io.Writer, img image.Image, o *Options) error {
     if o.Quality < 0 || o.Quality > 100 {
         return errors.New("Options.Quality must be in [0, 100]")
     }
@@ -151,7 +164,7 @@ func encodeLossy(w io.Writer, img image.Image, o *Options) error {
     if alpha == nil && !meta.has() {
         // Fully opaque, no metadata: simple VP8 container, byte-for-byte
         // identical to prior releases.
-        return vp8enc.EncodeWebP(w, img, vp8enc.EncodeOptions{
+        return vp8enc.EncodeWebPContext(ctx, w, img, vp8enc.EncodeOptions{
             Quality: q,
             Method:  o.Method,
         })
@@ -160,7 +173,7 @@ func encodeLossy(w io.Writer, img image.Image, o *Options) error {
     // Alpha and/or metadata require the VP8X container. Chunk order per the
     // WebP container spec: VP8X, ICCP, [ALPH], VP8, EXIF, XMP.
     var vp8buf bytes.Buffer
-    if err := vp8enc.EncodeFrame(&vp8buf, img, vp8enc.EncodeOptions{
+    if err := vp8enc.EncodeFrameContext(ctx, &vp8buf, img, vp8enc.EncodeOptions{
         Quality: q,
         Method:  o.Method,
     }); err != nil {
@@ -277,7 +290,14 @@ func encodeAlphaVP8L(alpha []byte, w, h int) ([]byte, error) {
 // Returns:
 //   An error if encoding fails or writing to the io.Writer encounters an issue.
 func EncodeAll(w io.Writer, ani *Animation, o *Options) error {
-    frames, alpha, err := writeFrames(ani, o)
+    return EncodeAllContext(context.Background(), w, ani, o)
+}
+
+// EncodeAllContext behaves like EncodeAll but aborts with ctx.Err() when ctx
+// is cancelled. Cancellation is checked before each frame is encoded, which
+// is the granularity that matters for long multi-frame animations.
+func EncodeAllContext(ctx context.Context, w io.Writer, ani *Animation, o *Options) error {
+    frames, alpha, err := writeFrames(ctx, ani, o)
     if err != nil {
         return err
     }
@@ -391,7 +411,7 @@ func writeChunkVP8X(buf *bytes.Buffer, bounds image.Rectangle, flagAlpha, flagAn
     buf.Write([]byte{byte(dy), byte(dy >> 8), byte(dy >> 16)})
 }
 
-func writeFrames(ani *Animation, o *Options) (*bytes.Buffer, bool, error) {
+func writeFrames(ctx context.Context, ani *Animation, o *Options) (*bytes.Buffer, bool, error) {
     if len(ani.Images) == 0 {
         return nil, false, errors.New("must provide at least one image")
     }
@@ -423,6 +443,10 @@ func writeFrames(ani *Animation, o *Options) (*bytes.Buffer, bool, error) {
 
     var hasAlpha bool
     for i, img := range ani.Images {
+        if err := ctx.Err(); err != nil {
+            return nil, false, err
+        }
+
         var framePayload bytes.Buffer
         var alpha bool
 
@@ -435,7 +459,7 @@ func writeFrames(ani *Animation, o *Options) (*bytes.Buffer, bool, error) {
                 alpha = true
             }
             var vp8 bytes.Buffer
-            if err := vp8enc.EncodeFrame(&vp8, img, vp8enc.EncodeOptions{
+            if err := vp8enc.EncodeFrameContext(ctx, &vp8, img, vp8enc.EncodeOptions{
                 Quality: quality,
                 Method:  method,
             }); err != nil {
