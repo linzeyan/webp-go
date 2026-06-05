@@ -64,6 +64,21 @@ ani := gowebp.Animation{
 gowebp.EncodeAll(f, &ani, nil)
 ```
 
+### Metadata (ICC / EXIF / XMP)
+
+Setting any of `ICCProfile`, `EXIF`, or `XMP` automatically wraps the
+output in a VP8X container and writes the corresponding chunks in the
+spec-mandated order (`VP8X → ICCP → image data → EXIF → XMP`). Works
+with lossless, lossy, and animated output.
+
+```go
+err := gowebp.Encode(f, img, &gowebp.Options{
+    ICCProfile: iccBytes, // raw ICC profile
+    EXIF:       exifBytes, // raw EXIF block
+    XMP:        xmpBytes,  // raw XMP packet
+})
+```
+
 ### Decoding
 
 ```go
@@ -80,15 +95,15 @@ The `Method` field picks between different speed/quality/size
 tradeoffs. Higher values spend more CPU per macroblock to produce
 smaller or higher-quality output.
 
-| Method | Strategy | Notes |
-|---|---|---|
-| 0 | I16 with DC_PRED only | fastest baseline |
-| 1 | I16 with 4-mode SSE search | +1–3 dB over M0 |
-| 2 | B_PRED with 10 I4 modes per sub-block | best on textured content |
-| 3 | Per-MB I16/B_PRED arbitration (prediction SSE) | fast, good default |
-| 4 | Per-MB arbitration with reconstruction-aware RDO | **recommended** |
-| 5 | Dual-path (measure both I16 and B_PRED) | principled reference |
-| 6 | Adds trailing-coefficient trellis trim | helps on high-freq content |
+| Method | Strategy                                         | Notes                      |
+| ------ | ------------------------------------------------ | -------------------------- |
+| 0      | I16 with DC_PRED only                            | fastest baseline           |
+| 1      | I16 with 4-mode SSE search                       | +1-3 dB over M0            |
+| 2      | B_PRED with 10 I4 modes per sub-block            | best on textured content   |
+| 3      | Per-MB I16/B_PRED arbitration (prediction SSE)   | fast, good default         |
+| 4      | Per-MB arbitration with reconstruction-aware RDO | **recommended**            |
+| 5      | Dual-path (measure both I16 and B_PRED)          | principled reference       |
+| 6      | Adds trailing-coefficient trellis trim           | helps on high-freq content |
 
 Encoding is goroutine-safe: each `Encode`/`EncodeAll` call is
 self-contained and has no shared mutable state.
@@ -108,30 +123,30 @@ go test -bench=. -benchtime=5x
 
 ### File sizes (bytes per frame)
 
-| Image | PNG | Lossless | Lossy Q=50 M=4 | Lossy Q=75 M=3 | Lossy Q=75 M=4 | Lossy Q=90 M=4 |
-|---|---:|---:|---:|---:|---:|---:|
-| [`1.png`](https://www.gstatic.com/webp/gallery3/1.png) (400×301) | 120 188 | **97 720** | 16 766 | 17 648 | 24 906 | 43 518 |
-| [`2.png`](https://www.gstatic.com/webp/gallery3/2.png) (386×395) | 45 659 | **37 018** | 15 050 | 13 808 | 21 888 | 33 632 |
-| [`3.png`](https://www.gstatic.com/webp/gallery3/3.png) (800×600) | 236 018 | **194 714** | 80 992 | 80 552 | 95 330 | 130 828 |
-| [`4.png`](https://www.gstatic.com/webp/gallery3/4.png) (421×163) | 52 681 | **41 554** | 27 304 | 24 838 | 35 736 | 47 510 |
-| [`5.png`](https://www.gstatic.com/webp/gallery3/5.png) (300×300) | 138 919 | **123 932** | 74 202 | 78 300 | 97 588 | 133 548 |
+| Image                                                            |     PNG |    Lossless | Lossy Q=50 M=4 | Lossy Q=75 M=3 | Lossy Q=75 M=4 | Lossy Q=90 M=4 |
+| ---------------------------------------------------------------- | ------: | ----------: | -------------: | -------------: | -------------: | -------------: |
+| [`1.png`](https://www.gstatic.com/webp/gallery3/1.png) (400×301) | 120 188 |  **97 720** |         16 766 |         17 648 |         24 906 |         43 518 |
+| [`2.png`](https://www.gstatic.com/webp/gallery3/2.png) (386×395) |  45 659 |  **37 018** |         15 050 |         13 808 |         21 888 |         33 632 |
+| [`3.png`](https://www.gstatic.com/webp/gallery3/3.png) (800×600) | 236 018 | **194 714** |         80 992 |         80 552 |         95 330 |        130 828 |
+| [`4.png`](https://www.gstatic.com/webp/gallery3/4.png) (421×163) |  52 681 |  **41 554** |         27 304 |         24 838 |         35 736 |         47 510 |
+| [`5.png`](https://www.gstatic.com/webp/gallery3/5.png) (300×300) | 138 919 | **123 932** |         74 202 |         78 300 |         97 588 |        133 548 |
 
-- **Lossless (VP8L)** averages 13–23 % smaller than PNG's best compression.
-- **Lossy Q=75 M=3** is 1.8×–3.3× smaller than lossless on the same images.
+- **Lossless (VP8L)** averages 13-23 % smaller than PNG's best compression.
+- **Lossy Q=75 M=3** is 1.8×-3.3× smaller than lossless on the same images.
 - **Lossy Q=50 M=4** can reach 7× smaller than PNG while still
   producing visually acceptable output on photos.
 
 ### Encode time (ns/op)
 
-| Image | PNG | Lossless | Lossy Q=75 M=3 | Lossy Q=75 M=4 |
-|---|---:|---:|---:|---:|
-| `1.png` (400×301) | 38 034 | **25 745** | 30 476 | 30 629 |
-| `2.png` (386×395) | 82 888 | **29 999** | 34 298 | 49 051 |
-| `3.png` (800×600) | 152 804 | **100 415** | 110 645 | 117 259 |
-| `4.png` (421×163) | 23 707 | **24 294** | 17 631 | 19 426 |
-| `5.png` (300×300) | 54 435 | **20 294** | 27 094 | 27 931 |
+| Image             |     PNG |    Lossless | Lossy Q=75 M=3 | Lossy Q=75 M=4 |
+| ----------------- | ------: | ----------: | -------------: | -------------: |
+| `1.png` (400×301) |  38 034 |  **25 745** |         30 476 |         30 629 |
+| `2.png` (386×395) |  82 888 |  **29 999** |         34 298 |         49 051 |
+| `3.png` (800×600) | 152 804 | **100 415** |        110 645 |        117 259 |
+| `4.png` (421×163) |  23 707 |  **24 294** |         17 631 |         19 426 |
+| `5.png` (300×300) |  54 435 |  **20 294** |         27 094 |         27 931 |
 
-All timings in microseconds for brevity: lossless WebP is **≈ 1.5–2.8×
+All timings in microseconds for brevity: lossless WebP is **≈ 1.5-2.8×
 faster than PNG** across the gallery, while producing smaller files.
 Lossy encoding is typically within a small constant factor of
 lossless speed.
@@ -142,8 +157,8 @@ Y-PSNR measured against VP8 limited-range BT.601 (what a real decoder
 shows). Higher is better; >40 dB is visually lossless on photographic
 content.
 
-| Image | Y-PSNR |
-|---|---:|
+| Image   |  Y-PSNR |
+| ------- | ------: |
 | `1.png` | 39.2 dB |
 | `2.png` | 42.2 dB |
 | `3.png` | 43.5 dB |
@@ -155,9 +170,9 @@ so future encoder changes can't quietly regress quality.
 
 ## BT.601 color handling
 
-VP8 stores pixels in limited-range BT.601 YCbCr (luma 16–235, chroma
-16–240) per RFC 6386. Go's stdlib `image/color.YCbCrToRGB` uses the
-JFIF full-range inverse, which shifts the resulting RGB by 2–5 units
+VP8 stores pixels in limited-range BT.601 YCbCr (luma 16-235, chroma
+16-240) per RFC 6386. Go's stdlib `image/color.YCbCrToRGB` uses the
+JFIF full-range inverse, which shifts the resulting RGB by 2-5 units
 per channel when applied to VP8 samples.
 
 `Decode` handles this automatically: for VP8 sources the returned
@@ -183,8 +198,8 @@ fidelity and don't go through YCbCr, so no wrapping is applied.
 ## Implementation notes
 
 The lossy VP8 encoder lives in `internal/vp8enc/` and is a pure-Go
-implementation of **RFC 6386** (*The VP8 Data Format and Decoding
-Guide*). The following open-source implementations were consulted as
+implementation of **RFC 6386** (_The VP8 Data Format and Decoding
+Guide_). The following open-source implementations were consulted as
 references for bit-exact compatibility; no code was copied, but table
 values (which are specification constants) were transcribed:
 

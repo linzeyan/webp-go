@@ -28,7 +28,8 @@ import (
 // Fields:
 //   - UseExtendedFormat: If true, wraps the VP8L frame inside a VP8X container
 //     to enable metadata support. This does not affect image compression or
-//     encoding itself, as VP8L remains the encoding format.
+//     encoding itself, as VP8L remains the encoding format. Setting any of
+//     ICCProfile/EXIF/XMP also forces the VP8X container automatically.
 //   - Lossy: If true, encode as VP8 (lossy). Otherwise (default) encode as
 //     VP8L (lossless), preserving existing behavior byte-for-byte.
 //   - Quality: Lossy quality in [0, 100]. Higher values preserve more
@@ -36,11 +37,21 @@ import (
 //   - Method: Lossy speed/quality tradeoff in [0, 6]. Higher values spend
 //     more time searching for better compression. Default 4. Ignored when
 //     Lossy is false.
+//   - ICCProfile: Raw ICC color-profile bytes. When non-empty they are
+//     emitted as an ICCP chunk (before the image data) inside a VP8X
+//     container. Empty means no profile is written.
+//   - EXIF: Raw EXIF metadata bytes, emitted as an EXIF chunk after the
+//     image data. Empty means no EXIF chunk is written.
+//   - XMP: Raw XMP metadata bytes, emitted as an "XMP " chunk after the
+//     image data. Empty means no XMP chunk is written.
 type Options struct {
     UseExtendedFormat   bool
     Lossy               bool
     Quality             float32
     Method              int
+    ICCProfile          []byte
+    EXIF                []byte
+    XMP                 []byte
 }
 
 // Animation holds configuration settings for WebP animations.
@@ -89,15 +100,26 @@ func Encode(w io.Writer, img image.Image, o *Options) error {
         return err
     }
 
+    meta := optionsMetadata(o)
     buf := &bytes.Buffer{}
 
-    if o != nil && o.UseExtendedFormat {
-        writeChunkVP8X(buf, img.Bounds(), hasAlpha, false)
+    // Chunk order per the WebP container spec: VP8X, ICCP, VP8L, EXIF, XMP.
+    if (o != nil && o.UseExtendedFormat) || meta.has() {
+        writeChunkVP8X(buf, img.Bounds(), hasAlpha, false, meta)
     }
+    writeMetaChunk(buf, "ICCP", meta.icc)
 
     buf.Write([]byte("VP8L"))
     binary.Write(buf, binary.LittleEndian, uint32(stream.Len()))
     buf.Write(stream.Bytes())
+    // RIFF requires even-padded chunk data. The VP8L chunk only needs a pad
+    // byte when EXIF/XMP chunks follow it; without trailing metadata the
+    // output stays byte-for-byte identical to prior releases.
+    if (len(meta.exif) > 0 || len(meta.xmp) > 0) && stream.Len()&1 == 1 {
+        buf.WriteByte(0)
+    }
+    writeMetaChunk(buf, "EXIF", meta.exif)
+    writeMetaChunk(buf, "XMP ", meta.xmp)
 
     w.Write([]byte("RIFF"))
     binary.Write(w, binary.LittleEndian, uint32(4 + buf.Len()))
@@ -124,16 +146,19 @@ func encodeLossy(w io.Writer, img image.Image, o *Options) error {
         q = 75
     }
 
+    meta := optionsMetadata(o)
     alpha := vp8enc.ExtractAlpha(img)
-    if alpha == nil {
-        // Fully opaque (or no alpha channel): simple VP8 container.
+    if alpha == nil && !meta.has() {
+        // Fully opaque, no metadata: simple VP8 container, byte-for-byte
+        // identical to prior releases.
         return vp8enc.EncodeWebP(w, img, vp8enc.EncodeOptions{
             Quality: q,
             Method:  o.Method,
         })
     }
 
-    // Mixed-alpha path: VP8X + VP8 + ALPH.
+    // Alpha and/or metadata require the VP8X container. Chunk order per the
+    // WebP container spec: VP8X, ICCP, [ALPH], VP8, EXIF, XMP.
     var vp8buf bytes.Buffer
     if err := vp8enc.EncodeFrame(&vp8buf, img, vp8enc.EncodeOptions{
         Quality: q,
@@ -143,9 +168,14 @@ func encodeLossy(w io.Writer, img image.Image, o *Options) error {
     }
 
     inner := &bytes.Buffer{}
-    writeChunkVP8X(inner, img.Bounds(), true, false)
-    writeChunkALPH(inner, img.Bounds(), alpha)
+    writeChunkVP8X(inner, img.Bounds(), alpha != nil, false, meta)
+    writeMetaChunk(inner, "ICCP", meta.icc)
+    if alpha != nil {
+        writeChunkALPH(inner, img.Bounds(), alpha)
+    }
     writeChunkVP8(inner, vp8buf.Bytes())
+    writeMetaChunk(inner, "EXIF", meta.exif)
+    writeMetaChunk(inner, "XMP ", meta.xmp)
 
     w.Write([]byte("RIFF"))
     binary.Write(w, binary.LittleEndian, uint32(4+inner.Len()))
@@ -258,9 +288,13 @@ func EncodeAll(w io.Writer, ani *Animation, o *Options) error {
         bounds.Max.Y = max(img.Bounds().Max.Y, bounds.Max.Y)
     }
 
+    meta := optionsMetadata(o)
     buf := &bytes.Buffer{}
 
-    writeChunkVP8X(buf, bounds, alpha, true)
+    // Chunk order per the WebP container spec: VP8X, ICCP, ANIM+frames,
+    // EXIF, XMP.
+    writeChunkVP8X(buf, bounds, alpha, true, meta)
+    writeMetaChunk(buf, "ICCP", meta.icc)
 
     buf.Write([]byte("ANIM"))
     binary.Write(buf, binary.LittleEndian, uint32(6))
@@ -268,6 +302,9 @@ func EncodeAll(w io.Writer, ani *Animation, o *Options) error {
     binary.Write(buf, binary.LittleEndian, uint16(ani.LoopCount))
 
     buf.Write(frames.Bytes())
+
+    writeMetaChunk(buf, "EXIF", meta.exif)
+    writeMetaChunk(buf, "XMP ", meta.xmp)
 
     w.Write([]byte("RIFF"))
     binary.Write(w, binary.LittleEndian, uint32(4 + buf.Len()))
@@ -278,17 +315,70 @@ func EncodeAll(w io.Writer, ani *Animation, o *Options) error {
     return nil
 }
 
-func writeChunkVP8X(buf *bytes.Buffer, bounds image.Rectangle, flagAlpha, flagAni bool) {
+// metadata bundles the optional ICC/EXIF/XMP payloads pulled from Options so
+// they can be threaded through the chunk writers without widening every
+// signature with three more slices.
+type metadata struct {
+    icc  []byte
+    exif []byte
+    xmp  []byte
+}
+
+// has reports whether any metadata payload is present, i.e. whether the VP8X
+// container must be emitted even when the caller did not set UseExtendedFormat.
+func (m metadata) has() bool {
+    return len(m.icc) > 0 || len(m.exif) > 0 || len(m.xmp) > 0
+}
+
+// optionsMetadata extracts the metadata payloads from Options, tolerating a nil
+// Options pointer (the common "encode with defaults" call).
+func optionsMetadata(o *Options) metadata {
+    if o == nil {
+        return metadata{}
+    }
+    return metadata{icc: o.ICCProfile, exif: o.EXIF, xmp: o.XMP}
+}
+
+// writeMetaChunk emits a metadata sub-chunk (ICCP/EXIF/XMP) with even-length
+// padding. It is a no-op for empty payloads so callers can invoke it
+// unconditionally. fourCC must be exactly four bytes (e.g. "XMP " with a
+// trailing space).
+func writeMetaChunk(buf *bytes.Buffer, fourCC string, payload []byte) {
+    if len(payload) == 0 {
+        return
+    }
+    buf.Write([]byte(fourCC))
+    binary.Write(buf, binary.LittleEndian, uint32(len(payload)))
+    buf.Write(payload)
+    if len(payload)&1 == 1 {
+        buf.WriteByte(0)
+    }
+}
+
+func writeChunkVP8X(buf *bytes.Buffer, bounds image.Rectangle, flagAlpha, flagAni bool, meta metadata) {
     buf.Write([]byte("VP8X"))
     binary.Write(buf, binary.LittleEndian, uint32(10))
 
+    // VP8X feature flags byte (WebP container spec): Rsv Rsv I L E X A R.
     var flags byte
     if flagAni {
-        flags |= 1 << 1
+        flags |= 1 << 1 // A: animation
     }
 
     if flagAlpha {
-        flags |= 1 << 4
+        flags |= 1 << 4 // L: alpha
+    }
+
+    if len(meta.icc) > 0 {
+        flags |= 1 << 5 // I: ICC profile
+    }
+
+    if len(meta.exif) > 0 {
+        flags |= 1 << 3 // E: EXIF metadata
+    }
+
+    if len(meta.xmp) > 0 {
+        flags |= 1 << 2 // X: XMP metadata
     }
 
     binary.Write(buf, binary.LittleEndian, flags)

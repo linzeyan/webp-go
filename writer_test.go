@@ -420,7 +420,7 @@ func TestWriteChunkVP8X(t *testing.T) {
         },
     }{
         buffer := &bytes.Buffer{}
-        writeChunkVP8X(buffer, tt.bounds, tt.flagAlpha, tt.flagAni)
+        writeChunkVP8X(buffer, tt.bounds, tt.flagAlpha, tt.flagAni, metadata{})
 
         if !bytes.Equal(buffer.Bytes(), tt.expectedBits) {
             t.Errorf("test %d: buffer mismatch expected: %v got: %v\n", id, tt.expectedBits, buffer.Bytes())
