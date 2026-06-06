@@ -774,13 +774,19 @@ func writeBitStreamHeader(w *bitWriter, bounds image.Rectangle, hasAlpha bool) {
 }
 
 func writeBitStreamData(w *bitWriter, img image.Image, colorCacheBits, effort, predictBits int, transforms [4]bool) error {
-    pixels, err := flatten(img)
-    if err != nil {
-        return err
-    }
-
     width := img.Bounds().Dx()
     height := img.Bounds().Dy()
+
+    // pixels is the mutable working copy of the image. Recycle its backing
+    // buffer through the pool; the palette transform may rebind pixels to a
+    // narrower packed buffer, but pbuf still references the original, so it is
+    // released correctly at return.
+    pbuf := getPixelBuf(width * height)
+    defer putPixelBuf(pbuf)
+    pixels := *pbuf
+    if err := flattenInto(img, pixels); err != nil {
+        return err
+    }
 
     if transforms[transformColorIndexing] {
         w.writeBits(1, 1)
@@ -1137,24 +1143,35 @@ func computeHistograms(pixels []int, colorCacheBits int) [][]int {
 func flatten(img image.Image) ([]color.NRGBA, error) {
     w := img.Bounds().Dx()
     h := img.Bounds().Dy()
+    pixels := make([]color.NRGBA, w*h)
+    if err := flattenInto(img, pixels); err != nil {
+        return nil, err
+    }
+    return pixels, nil
+}
+
+// flattenInto writes img's pixels into dst (which must have length width*height)
+// so callers can supply a pooled buffer instead of allocating one per call.
+func flattenInto(img image.Image, dst []color.NRGBA) error {
+    w := img.Bounds().Dx()
+    h := img.Bounds().Dy()
 
     rgba, ok := img.(*image.NRGBA)
     if !ok {
-        return nil, errors.New("unsupported image format")
+        return errors.New("unsupported image format")
     }
 
-    pixels := make([]color.NRGBA, w * h)
     for y := 0; y < h; y++ {
         for x := 0; x < w; x++ {
             i := rgba.PixOffset(x, y)
             s := rgba.Pix[i : i + 4 : i + 4]
 
-            pixels[y * w + x].R = uint8(s[0])
-            pixels[y * w + x].G = uint8(s[1])
-            pixels[y * w + x].B = uint8(s[2])
-            pixels[y * w + x].A = uint8(s[3])
+            dst[y * w + x].R = uint8(s[0])
+            dst[y * w + x].G = uint8(s[1])
+            dst[y * w + x].B = uint8(s[2])
+            dst[y * w + x].A = uint8(s[3])
         }
     }
 
-    return pixels, nil
+    return nil
 }
