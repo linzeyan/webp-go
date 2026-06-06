@@ -716,7 +716,7 @@ func TestWritBitStreamErrors(t *testing.T) {
             "invalid image size",
         },
     }{
-        _, _, err := writeBitStream(tt.img, 0)
+        _, _, err := writeBitStream(tt.img, 0, 0)
         if err == nil {
             t.Errorf("test %v: expected error %v got nil", id, tt.expectedMsg)
             continue
@@ -794,7 +794,7 @@ func TestWriteBitStream(t *testing.T) {
             },
         },
     }{
-        b, alpha, err := writeBitStream(tt.img, 0)
+        b, alpha, err := writeBitStream(tt.img, 0, 0)
         if err != nil {
             t.Errorf("test %v: unexpected error %v", id, err)
             continue

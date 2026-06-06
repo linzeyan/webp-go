@@ -45,6 +45,14 @@ value. It makes the encoder search for the best predictor tile size and
 color-cache size; the decoded pixels are identical, only the file size
 changes. `Method 0` (the default) keeps the fast path.
 
+`NearLossless` trades a small, bounded error for smaller files. It is the
+maximum number of low R/G/B bits the encoder may drop in smooth regions
+(alpha and edges stay exact); the per-channel error is at most
+`2^NearLossless - 1`. The encoder also keeps the exact encoding when it
+is smaller, so the output is never larger than plain lossless. It helps
+most on noisy/photographic content. `NearLossless 0` (the default) is
+exact lossless.
+
 ```go
 err := gowebp.Encode(f, img, &gowebp.Options{Method: 1})
 ```

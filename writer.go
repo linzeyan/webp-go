@@ -48,6 +48,11 @@ import (
 //     image data. Empty means no EXIF chunk is written.
 //   - XMP: Raw XMP metadata bytes, emitted as an "XMP " chunk after the
 //     image data. Empty means no XMP chunk is written.
+//   - NearLossless: Lossless-path only. 0 (default) is exact lossless. A
+//     positive value is the maximum number of low bits the encoder may drop
+//     from R/G/B in smooth regions (alpha and edges are kept exact), trading a
+//     small, bounded per-channel error for smaller files. Sensible range is
+//     1..5; larger values lose more. Ignored when Lossy is true.
 type Options struct {
     UseExtendedFormat   bool
     Lossy               bool
@@ -56,6 +61,7 @@ type Options struct {
     ICCProfile          []byte
     EXIF                []byte
     XMP                 []byte
+    NearLossless        int
 }
 
 // Animation holds configuration settings for WebP animations.
@@ -111,7 +117,7 @@ func EncodeContext(ctx context.Context, w io.Writer, img image.Image, o *Options
         return encodeLossy(ctx, w, img, o)
     }
 
-    stream, hasAlpha, err := writeBitStream(img, losslessEffort(o))
+    stream, hasAlpha, err := writeBitStream(img, losslessEffort(o), nearLosslessLevel(o))
     if err != nil {
         return err
     }
@@ -257,7 +263,7 @@ func encodeAlphaVP8L(alpha []byte, w, h int) ([]byte, error) {
             img.Pix[(y*w+x)*4+3] = 0xff         // fully opaque
         }
     }
-    stream, _, err := writeBitStream(img, 0)
+    stream, _, err := writeBitStream(img, 0, 0)
     if err != nil {
         return nil, err
     }
@@ -470,7 +476,7 @@ func writeFrames(ctx context.Context, ani *Animation, o *Options) (*bytes.Buffer
             }
             writeChunkVP8(&framePayload, vp8.Bytes())
         } else {
-            stream, a, err := writeBitStream(img, method)
+            stream, a, err := writeBitStream(img, method, nearLosslessLevel(o))
             if err != nil {
                 return nil, false, err
             }
@@ -522,7 +528,14 @@ func losslessEffort(o *Options) int {
     return o.Method
 }
 
-func writeBitStream(img image.Image, effort int) (*bytes.Buffer, bool, error) {
+func nearLosslessLevel(o *Options) int {
+    if o == nil {
+        return 0
+    }
+    return o.NearLossless
+}
+
+func writeBitStream(img image.Image, effort, nearLossless int) (*bytes.Buffer, bool, error) {
     if img == nil {
         return nil, false, errors.New("image is nil")
     }
@@ -540,31 +553,40 @@ func writeBitStream(img image.Image, effort int) (*bytes.Buffer, bool, error) {
     rgba := image.NewNRGBA(image.Rect(0, 0, img.Bounds().Dx(), img.Bounds().Dy()))
     draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Src)
 
-    b := &bytes.Buffer{}
-    s := &bitWriter{Buffer: b}
-
-    // The bit-stream header is exactly 40 bits (a whole number of bytes), so
-    // s is byte-aligned here. That lets the effort search build candidate
-    // data blocks independently and splice the winning bytes in directly.
-    writeBitStreamHeader(s, rgba.Bounds(), !rgba.Opaque())
-
     var transforms [4]bool
     transforms[transformPredict] = !isIndexed
     transforms[transformColor] = false
     transforms[transformSubGreen] = !isIndexed
     transforms[transformColorIndexing] = isIndexed
 
-    if effort <= 0 {
-        if err := writeBitStreamData(s, rgba, 4, 0, defaultPredictBits, transforms); err != nil {
-            return nil, false, err
-        }
-    } else {
-        data, err := searchBestData(rgba, transforms, effort)
-        if err != nil {
-            return nil, false, err
-        }
-        s.writeBytes(data.Bytes())
+    data, err := encodeData(rgba, transforms, effort)
+    if err != nil {
+        return nil, false, err
     }
+
+    // Near-lossless: also encode a precision-reduced copy and keep whichever
+    // is smaller. Discretization shrinks noisy/photographic content but can
+    // grow clean synthetic gradients, so the fallback guarantees the output is
+    // never larger than plain lossless while honoring the error bound.
+    if nearLossless > 0 && !isIndexed {
+        near := image.NewNRGBA(rgba.Rect)
+        copy(near.Pix, rgba.Pix)
+        applyNearLossless(near, nearLossless)
+        if nearData, err := encodeData(near, transforms, effort); err != nil {
+            return nil, false, err
+        } else if nearData.Len() < data.Len() {
+            data = nearData
+        }
+    }
+
+    b := &bytes.Buffer{}
+    s := &bitWriter{Buffer: b}
+
+    // The bit-stream header is exactly 40 bits (a whole number of bytes), so s
+    // is byte-aligned here and the data block's bytes can be spliced in
+    // directly. Alpha is untouched by near-lossless, so the flag is stable.
+    writeBitStreamHeader(s, rgba.Bounds(), !rgba.Opaque())
+    s.writeBytes(data.Bytes())
 
     s.alignByte()
 
@@ -584,6 +606,17 @@ const defaultPredictBits = 4
 // finely but cost more block-image overhead; the best tradeoff is image-
 // dependent, so we measure real encoded size for each.
 var predictBitsCandidates = []int{2, 3, 4, 5, 6}
+
+// encodeData produces the VP8L data block (everything after the bit-stream
+// header) into a fresh byte-aligned buffer, running the effort search when
+// effort > 0. Splitting this out lets writeBitStream encode several candidate
+// pixel buffers (e.g. exact vs near-lossless) and keep the smallest.
+func encodeData(img image.Image, transforms [4]bool, effort int) (*bytes.Buffer, error) {
+    if effort <= 0 {
+        return buildBitStreamData(img, transforms, 0, defaultPredictBits)
+    }
+    return searchBestData(img, transforms, effort)
+}
 
 // searchBestData builds the VP8L data block under a non-zero effort: it picks
 // the predictor tile size that encodes smallest, then does the final build at
