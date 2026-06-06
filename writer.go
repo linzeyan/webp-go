@@ -579,6 +579,17 @@ func writeBitStream(img image.Image, effort, nearLossless int) (*bytes.Buffer, b
         }
     }
 
+    // Auto-palette: a non-indexed image with <= 256 distinct colors (logos,
+    // screenshots, line art) often packs far smaller via the color-indexing
+    // transform. Try it under effort and keep it only when it wins.
+    if effort > 0 && !isIndexed && hasFewColors(rgba) {
+        var palTransforms [4]bool
+        palTransforms[transformColorIndexing] = true
+        if palData, err := encodeData(rgba, palTransforms, effort); err == nil && palData.Len() < data.Len() {
+            data = palData
+        }
+    }
+
     b := &bytes.Buffer{}
     s := &bitWriter{Buffer: b}
 
@@ -595,6 +606,23 @@ func writeBitStream(img image.Image, effort, nearLossless int) (*bytes.Buffer, b
     }
 
     return b, !rgba.Opaque(), nil
+}
+
+// hasFewColors reports whether img has at most 256 distinct RGBA colors, the
+// precondition for the color-indexing (palette) transform. It bails out as
+// soon as a 257th color appears, so it is cheap on full-color images.
+func hasFewColors(img *image.NRGBA) bool {
+    seen := make(map[uint32]struct{}, 257)
+    for i := 0; i+4 <= len(img.Pix); i += 4 {
+        key := uint32(img.Pix[i])<<24 | uint32(img.Pix[i+1])<<16 | uint32(img.Pix[i+2])<<8 | uint32(img.Pix[i+3])
+        if _, ok := seen[key]; !ok {
+            seen[key] = struct{}{}
+            if len(seen) > 256 {
+                return false
+            }
+        }
+    }
+    return true
 }
 
 // defaultPredictBits is the predictor-transform tile size (in bits; 1<<4 = 16

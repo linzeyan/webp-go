@@ -42,8 +42,10 @@ if err := gowebp.Encode(f, img, nil); err != nil {
 
 For a smaller (but slower) lossless file, set `Method` to any positive
 value. It makes the encoder search for the best predictor tile size and
-color-cache size; the decoded pixels are identical, only the file size
-changes. `Method 0` (the default) keeps the fast path.
+color-cache size, and switch to a palette when the image has 256 or
+fewer colors (logos, screenshots); the decoded pixels are identical,
+only the file size changes. `Method 0` (the default) keeps the fast
+path.
 
 `NearLossless` trades a small, bounded error for smaller files. It is the
 maximum number of low R/G/B bits the encoder may drop in smooth regions
