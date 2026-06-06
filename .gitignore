@@ -1,2 +1,7 @@
 testdata/*.png
 testdata/*.webp
+
+# Go test/benchmark artifacts
+*.test
+*.prof
+*.out
