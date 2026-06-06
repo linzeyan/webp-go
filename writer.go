@@ -38,8 +38,9 @@ import (
 //   - Method: For lossy, the speed/quality tradeoff in [0, 6]; higher values
 //     spend more time searching for better compression (default 4). For
 //     lossless, Method doubles as an effort knob: 0 keeps the fast default
-//     output, while any positive value searches for the smallest color-cache
-//     size (slower, smaller; the decoded pixels are unchanged either way).
+//     output, while any positive value searches for the smallest predictor
+//     tile size and color-cache size (slower, smaller; the decoded pixels are
+//     unchanged either way).
 //   - ICCProfile: Raw ICC color-profile bytes. When non-empty they are
 //     emitted as an ICCP chunk (before the image data) inside a VP8X
 //     container. Empty means no profile is written.
@@ -542,6 +543,9 @@ func writeBitStream(img image.Image, effort int) (*bytes.Buffer, bool, error) {
     b := &bytes.Buffer{}
     s := &bitWriter{Buffer: b}
 
+    // The bit-stream header is exactly 40 bits (a whole number of bytes), so
+    // s is byte-aligned here. That lets the effort search build candidate
+    // data blocks independently and splice the winning bytes in directly.
     writeBitStreamHeader(s, rgba.Bounds(), !rgba.Opaque())
 
     var transforms [4]bool
@@ -550,11 +554,18 @@ func writeBitStream(img image.Image, effort int) (*bytes.Buffer, bool, error) {
     transforms[transformSubGreen] = !isIndexed
     transforms[transformColorIndexing] = isIndexed
 
-    err := writeBitStreamData(s, rgba, 4, effort, transforms)
-    if err != nil {
-        return nil, false, err
+    if effort <= 0 {
+        if err := writeBitStreamData(s, rgba, 4, 0, defaultPredictBits, transforms); err != nil {
+            return nil, false, err
+        }
+    } else {
+        data, err := searchBestData(rgba, transforms, effort)
+        if err != nil {
+            return nil, false, err
+        }
+        s.writeBytes(data.Bytes())
     }
-    
+
     s.alignByte()
 
     if b.Len() % 2 != 0 {
@@ -562,6 +573,52 @@ func writeBitStream(img image.Image, effort int) (*bytes.Buffer, bool, error) {
     }
 
     return b, !rgba.Opaque(), nil
+}
+
+// defaultPredictBits is the predictor-transform tile size (in bits; 1<<4 = 16
+// px tiles) used by the fast path and as the historical default.
+const defaultPredictBits = 4
+
+// predictBitsCandidates are the predictor-transform tile sizes the effort
+// search tries (2..6 → 4..64 px tiles). Smaller tiles adapt the predictor more
+// finely but cost more block-image overhead; the best tradeoff is image-
+// dependent, so we measure real encoded size for each.
+var predictBitsCandidates = []int{2, 3, 4, 5, 6}
+
+// searchBestData builds the VP8L data block under a non-zero effort: it picks
+// the predictor tile size that encodes smallest, then does the final build at
+// that size with the color-cache search enabled. Because defaultPredictBits is
+// among the candidates and the color-cache search includes the default size,
+// the result is never larger than the effort-0 output.
+func searchBestData(img image.Image, transforms [4]bool, effort int) (*bytes.Buffer, error) {
+    bestBits := defaultPredictBits
+    if transforms[transformPredict] {
+        bestLen := -1
+        for _, pb := range predictBitsCandidates {
+            // Tile-size selection uses the fixed default cache (effort 0) so
+            // the candidates are compared cheaply and fairly.
+            buf, err := buildBitStreamData(img, transforms, 0, pb)
+            if err != nil {
+                return nil, err
+            }
+            if bestLen < 0 || buf.Len() < bestLen {
+                bestLen, bestBits = buf.Len(), pb
+            }
+        }
+    }
+    return buildBitStreamData(img, transforms, effort, bestBits)
+}
+
+// buildBitStreamData encodes one VP8L data block into a fresh, byte-aligned
+// buffer so the caller can measure its size or splice it into the stream.
+func buildBitStreamData(img image.Image, transforms [4]bool, effort, predictBits int) (*bytes.Buffer, error) {
+    buf := &bytes.Buffer{}
+    bw := &bitWriter{Buffer: buf}
+    if err := writeBitStreamData(bw, img, 4, effort, predictBits, transforms); err != nil {
+        return nil, err
+    }
+    bw.alignByte()
+    return buf, nil
 }
 
 func writeBitStreamHeader(w *bitWriter, bounds image.Rectangle, hasAlpha bool) {
@@ -579,7 +636,7 @@ func writeBitStreamHeader(w *bitWriter, bounds image.Rectangle, hasAlpha bool) {
     w.writeBits(0, 3)
 }
 
-func writeBitStreamData(w *bitWriter, img image.Image, colorCacheBits, effort int, transforms [4]bool) error {
+func writeBitStreamData(w *bitWriter, img image.Image, colorCacheBits, effort, predictBits int, transforms [4]bool) error {
     pixels, err := flatten(img)
     if err != nil {
         return err
@@ -624,7 +681,7 @@ func writeBitStreamData(w *bitWriter, img image.Image, colorCacheBits, effort in
         w.writeBits(1, 1)
         w.writeBits(0, 2)
 
-        bits, bw, bh, blocks := applyPredictTransform(pixels, width, height)
+        bits, bw, bh, blocks := applyPredictTransform(pixels, width, height, predictBits)
 
         w.writeBits(uint64(bits - 2), 3);
         writeImageData(w, blocks, bw, bh, false, colorCacheBits)

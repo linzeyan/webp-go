@@ -844,7 +844,7 @@ func TestWriteBitStreamDataErrors(t *testing.T) {
         b := &bytes.Buffer{}
         s := &bitWriter{Buffer: b}
 
-        err := writeBitStreamData(s, tt.img, 0, 0, tt.transforms)
+        err := writeBitStreamData(s, tt.img, 0, 0, 4, tt.transforms)
         if err == nil {
             t.Errorf("test %v: expected error %v got nil", id, tt.expectedMsg)
             continue
@@ -1205,7 +1205,7 @@ func TestWriteBitStreamData(t *testing.T) {
         b := &bytes.Buffer{}
         s := &bitWriter{Buffer: b}
 
-        err := writeBitStreamData(s, img, tt.colorCacheBits, 0, tt.transforms)
+        err := writeBitStreamData(s, img, tt.colorCacheBits, 0, 4, tt.transforms)
         if err != nil {
             t.Fatalf("test %v: writeBitStreamData returned error: %v", id, err)
         }

@@ -26,8 +26,7 @@ const (
     transformColorIndexing  = transform(3)     
 )
 
-func applyPredictTransform(pixels []color.NRGBA, width, height int) (int, int, int, []color.NRGBA) {
-    tileBits := 4
+func applyPredictTransform(pixels []color.NRGBA, width, height, tileBits int) (int, int, int, []color.NRGBA) {
     tileSize := 1 << tileBits
     bw := (width + tileSize - 1) / tileSize
     bh := (height + tileSize - 1) / tileSize

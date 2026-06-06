@@ -41,9 +41,9 @@ if err := gowebp.Encode(f, img, nil); err != nil {
 ```
 
 For a smaller (but slower) lossless file, set `Method` to any positive
-value. It makes the encoder search for the best color-cache size; the
-decoded pixels are identical, only the file size changes. `Method 0`
-(the default) keeps the fast path.
+value. It makes the encoder search for the best predictor tile size and
+color-cache size; the decoded pixels are identical, only the file size
+changes. `Method 0` (the default) keeps the fast path.
 
 ```go
 err := gowebp.Encode(f, img, &gowebp.Options{Method: 1})

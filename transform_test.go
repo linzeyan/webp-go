@@ -68,7 +68,7 @@ func TestApplyPredictTransform(t *testing.T) {
             continue
         }
 
-        tileBit, bw, bh, blocks := applyPredictTransform(pixels, tt.width, tt.height)
+        tileBit, bw, bh, blocks := applyPredictTransform(pixels, tt.width, tt.height, 4)
 
         if bw != tt.expectedBlockWidth {
             t.Errorf("test %v: expected block width as %v got %v", id, tt.expectedBlockWidth, bw)
