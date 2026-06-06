@@ -626,7 +626,12 @@ func writeBitStream(img image.Image, effort, nearLossless int) (*bytes.Buffer, b
 
     _, isIndexed := img.(*image.Paletted)
 
-    rgba := image.NewNRGBA(image.Rect(0, 0, img.Bounds().Dx(), img.Bounds().Dy()))
+    // rgba is the working copy of the source. draw.Draw with Src overwrites
+    // every byte, so its Pix can come from the pool uncleared.
+    rw, rh := img.Bounds().Dx(), img.Bounds().Dy()
+    pixBuf := getByteBuf(rw * rh * 4)
+    defer putByteBuf(pixBuf)
+    rgba := &image.NRGBA{Pix: *pixBuf, Stride: rw * 4, Rect: image.Rect(0, 0, rw, rh)}
     draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Src)
 
     var transforms [4]bool
@@ -645,12 +650,16 @@ func writeBitStream(img image.Image, effort, nearLossless int) (*bytes.Buffer, b
     // grow clean synthetic gradients, so the fallback guarantees the output is
     // never larger than plain lossless while honoring the error bound.
     if nearLossless > 0 && !isIndexed {
-        near := image.NewNRGBA(rgba.Rect)
+        nb := getByteBuf(len(rgba.Pix))
+        near := &image.NRGBA{Pix: (*nb)[:len(rgba.Pix)], Stride: rgba.Stride, Rect: rgba.Rect}
         copy(near.Pix, rgba.Pix)
         applyNearLossless(near, nearLossless)
-        if nearData, err := encodeData(near, transforms, effort); err != nil {
+        nearData, err := encodeData(near, transforms, effort)
+        putByteBuf(nb)
+        if err != nil {
             return nil, false, err
-        } else if nearData.Len() < data.Len() {
+        }
+        if nearData.Len() < data.Len() {
             data = nearData
         }
     }
@@ -947,6 +956,25 @@ func getPixelBuf(n int) *[]color.NRGBA {
 }
 
 func putPixelBuf(p *[]color.NRGBA) { pixelBufPool.Put(p) }
+
+// bytePool recycles the Pix byte buffers of the working *image.NRGBA images.
+var bytePool = sync.Pool{
+    New: func() any { s := []byte(nil); return &s },
+}
+
+// getByteBuf returns a byte buffer of length n. The caller must overwrite it
+// fully before reading (draw.Draw / copy both do).
+func getByteBuf(n int) *[]byte {
+    p := bytePool.Get().(*[]byte)
+    if cap(*p) < n {
+        *p = make([]byte, n)
+    } else {
+        *p = (*p)[:n]
+    }
+    return p
+}
+
+func putByteBuf(p *[]byte) { bytePool.Put(p) }
 
 // getLZ77Scratch returns a scratch whose buffers fit npix pixels. head is
 // cleared because the LZ77 hash table must start empty; prev and encoded are
