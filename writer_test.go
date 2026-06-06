@@ -1351,7 +1351,7 @@ func TestEncodeImageData(t *testing.T) {
             },
         },
     } {
-        encoded := encodeImageData(tt.inputPixels, tt.width, tt.height, tt.colorCacheBits)
+        encoded := encodeImageData(tt.inputPixels, tt.width, tt.height, tt.colorCacheBits, getLZ77Scratch(len(tt.inputPixels)))
 
         if !reflect.DeepEqual(encoded, tt.expectedEncoded) {
             t.Errorf("test %d: encoded data mismatch\nexpected: %+v\n     got: %+v", id, tt.expectedEncoded, encoded)

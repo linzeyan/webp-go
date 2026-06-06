@@ -872,7 +872,8 @@ func writeImageData(w *bitWriter, pixels []color.NRGBA, width, height int, isRec
         w.writeBits(0, 1)
     }
 
-    encoded := encodeImageData(pixels, width, height, colorCacheBits)
+    scratch := getLZ77Scratch(len(pixels))
+    encoded := encodeImageData(pixels, width, height, colorCacheBits, scratch)
     histos := computeHistograms(encoded, colorCacheBits)
 
     var codes [][]huffmanCode
@@ -902,14 +903,49 @@ func writeImageData(w *bitWriter, pixels []color.NRGBA, width, height int, isRec
             i += 3
         }
     }
+
+    // encoded aliases scratch.encoded and is no longer read past this point.
+    lz77Pool.Put(scratch)
 }
 
-func encodeImageData(pixels []color.NRGBA, width, height, colorCacheBits int) []int {
-    head := make([]int, 1 << 14)
-    prev := make([]int, len(pixels))
+// lz77Scratch holds the large per-call buffers of encodeImageData so they can
+// be reused across the many calls an encode (and especially the effort search)
+// makes, instead of being reallocated each time.
+type lz77Scratch struct {
+    head    []int // 1<<14 hash heads; must be zeroed per use
+    prev    []int // sized to len(pixels)
+    encoded []int // sized to len(pixels)*4
+}
+
+var lz77Pool = sync.Pool{
+    New: func() any { return &lz77Scratch{head: make([]int, 1<<14)} },
+}
+
+// getLZ77Scratch returns a scratch whose buffers fit npix pixels. head is
+// cleared because the LZ77 hash table must start empty; prev and encoded are
+// always written before being read within a call, so they need no clearing.
+func getLZ77Scratch(npix int) *lz77Scratch {
+    s := lz77Pool.Get().(*lz77Scratch)
+    clear(s.head)
+    if cap(s.prev) < npix {
+        s.prev = make([]int, npix)
+    } else {
+        s.prev = s.prev[:npix]
+    }
+    if need := npix * 4; cap(s.encoded) < need {
+        s.encoded = make([]int, need)
+    } else {
+        s.encoded = s.encoded[:need]
+    }
+    return s
+}
+
+func encodeImageData(pixels []color.NRGBA, width, height, colorCacheBits int, scratch *lz77Scratch) []int {
+    head := scratch.head
+    prev := scratch.prev
     cache := make([]color.NRGBA, 1 << colorCacheBits)
 
-    encoded := make([]int, len(pixels) * 4)
+    encoded := scratch.encoded
     cnt := 0
 
     var distances = []int {
