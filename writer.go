@@ -921,6 +921,27 @@ var lz77Pool = sync.Pool{
     New: func() any { return &lz77Scratch{head: make([]int, 1<<14)} },
 }
 
+// pixelBufPool recycles full-image []color.NRGBA scratch buffers (e.g. the
+// predictor transform's residual plane). A *slice is stored so Put doesn't
+// allocate boxing the slice header.
+var pixelBufPool = sync.Pool{
+    New: func() any { s := []color.NRGBA(nil); return &s },
+}
+
+// getPixelBuf returns a buffer of length n from the pool, growing it if needed.
+// The contents are arbitrary, so the caller must fully write before reading.
+func getPixelBuf(n int) *[]color.NRGBA {
+    p := pixelBufPool.Get().(*[]color.NRGBA)
+    if cap(*p) < n {
+        *p = make([]color.NRGBA, n)
+    } else {
+        *p = (*p)[:n]
+    }
+    return p
+}
+
+func putPixelBuf(p *[]color.NRGBA) { pixelBufPool.Put(p) }
+
 // getLZ77Scratch returns a scratch whose buffers fit npix pixels. head is
 // cleared because the LZ77 hash table must start empty; prev and encoded are
 // always written before being read within a call, so they need no clearing.

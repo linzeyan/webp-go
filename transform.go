@@ -32,8 +32,13 @@ func applyPredictTransform(pixels []color.NRGBA, width, height, tileBits int) (i
     bh := (height + tileSize - 1) / tileSize
 
     blocks := make([]color.NRGBA, bw * bh)
-    deltas := make([]color.NRGBA, width * height)
-    
+
+    // deltas is the full residual plane: every pixel is written below before
+    // it is copied back into pixels, so a recycled (uncleared) buffer is fine.
+    deltasBuf := getPixelBuf(width * height)
+    deltas := *deltasBuf
+    defer putPixelBuf(deltasBuf)
+
     accum := [][]int{
         make([]int, 256),
         make([]int, 256),
