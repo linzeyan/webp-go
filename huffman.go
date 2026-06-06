@@ -37,14 +37,30 @@ func (h *nodeHeap) Pop() interface{} {
 
 func buildHuffmanTree(histo []int, maxDepth int) *node {
     sum := 0
+    leaves := 0
     for _, x := range histo {
         sum += x
+        if x > 0 {
+            leaves++
+        }
+    }
+    if leaves < 1 {
+        leaves = 1 // accounts for the padding node added below
     }
 
     minWeight := sum >> (maxDepth - 2)
 
-    nHeap := &nodeHeap{}
-    heap.Init(nHeap)
+    // A Huffman tree over k leaves has exactly 2k-1 nodes. Allocate them from a
+    // single arena instead of one &node{} per node (previously the dominant
+    // allocation site). The capacity is sized so append never reallocates,
+    // which keeps the node pointers handed out below stable.
+    arena := make([]node, 0, 2*leaves)
+    alloc := func(n node) *node {
+        arena = append(arena, n)
+        return &arena[len(arena)-1]
+    }
+
+    nHeap := make(nodeHeap, 0, leaves)
 
     for s, w := range histo {
         if w > 0 {
@@ -52,32 +68,32 @@ func buildHuffmanTree(histo []int, maxDepth int) *node {
                 w = minWeight
             }
 
-            heap.Push(nHeap, &node{
-                Weight: w, 
+            heap.Push(&nHeap, alloc(node{
+                Weight: w,
                 Symbol: s,
-            })
+            }))
         }
     }
-    
+
     for nHeap.Len() < 1 {
-        heap.Push(nHeap, &node{
-            Weight: minWeight, 
+        heap.Push(&nHeap, alloc(node{
+            Weight: minWeight,
             Symbol: 0,
-        })
-    }
-    
-    for nHeap.Len() > 1 {
-        n1 := heap.Pop(nHeap).(*node)
-        n2 := heap.Pop(nHeap).(*node)
-        heap.Push(nHeap, &node{
-            IsBranch: true, 
-            Weight: n1.Weight + n2.Weight, 
-            BranchLeft: n1, 
-            BranchRight: n2,
-        })
+        }))
     }
 
-    return heap.Pop(nHeap).(*node)
+    for nHeap.Len() > 1 {
+        n1 := heap.Pop(&nHeap).(*node)
+        n2 := heap.Pop(&nHeap).(*node)
+        heap.Push(&nHeap, alloc(node{
+            IsBranch:    true,
+            Weight:      n1.Weight + n2.Weight,
+            BranchLeft:  n1,
+            BranchRight: n2,
+        }))
+    }
+
+    return heap.Pop(&nHeap).(*node)
 }
 
 func buildhuffmanCodes(histo []int, maxDepth int) []huffmanCode {
@@ -89,7 +105,13 @@ func buildhuffmanCodes(histo []int, maxDepth int) []huffmanCode {
         return codes
     }
     
-    var symbols []huffmanCode
+    nonzero := 0
+    for _, w := range histo {
+        if w > 0 {
+            nonzero++
+        }
+    }
+    symbols := make([]huffmanCode, 0, nonzero)
     setBitDepths(tree, &symbols, 0)
 
     sort.Slice(symbols, func(i, j int) bool {
