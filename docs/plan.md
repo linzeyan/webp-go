@@ -1,6 +1,6 @@
 # gowebp 功能完善 Roadmap
 
-本文件規劃如何讓 `gowebp`（`github.com/KarpelesLab/gowebp`）的功能更趨完整。
+本文件規劃如何讓 `gowebp`（`github.com/linzeyan/webp-go`）的功能更趨完整。
 聚焦三個主軸：**Metadata 與標準符合**、**API 易用性**、**壓縮品質**。
 效能與安全的規劃另見 [`security.md`](./security.md)。
 

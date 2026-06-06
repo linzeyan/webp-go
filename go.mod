@@ -1,5 +1,5 @@
-module github.com/KarpelesLab/gowebp
+module github.com/linzeyan/webp-go
 
-go 1.22.2
+go 1.26.3
 
-require golang.org/x/image v0.24.0
+require golang.org/x/image v0.41.0

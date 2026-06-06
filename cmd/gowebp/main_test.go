@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/KarpelesLab/gowebp"
+	"github.com/linzeyan/webp-go"
 )
 
 func gradient(w, h int) *image.NRGBA {

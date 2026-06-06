@@ -23,7 +23,7 @@ import (
     //------------------------------
     //vp8 (lossy)
     //------------------------------
-    "github.com/KarpelesLab/gowebp/internal/vp8enc"
+    "github.com/linzeyan/webp-go/internal/vp8enc"
 )
 
 // Options holds configuration settings for WebP encoding.

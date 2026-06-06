@@ -52,9 +52,12 @@ func TestDecode(t *testing.T) {
             "",
         },
         {
+            // VP8X-wrapped VP8L with the alpha flag set. x/image >= 0.39
+            // decodes this natively (older versions rejected it, which is what
+            // DecodeIgnoreAlphaFlag was written to work around).
             img,
             true,
-            "webp: invalid format",
+            "",
         },
         {
             nil,    // if nil is used create a non-webp buffer
@@ -214,7 +217,7 @@ func TestDecodeIgnoreAlphaFlag(t *testing.T) {
         {
             true,
             true,
-            "webp: invalid format",
+            "",
         },
     }{
         img := generateTestImageNRGBA(8, 8, 64, tt.useAlpha)
@@ -226,7 +229,8 @@ func TestDecodeIgnoreAlphaFlag(t *testing.T) {
             continue
         }
 
-        // TEST A: we expect the default Decode to give an error for VP8X with Alpha flag set
+        // TEST A: the default Decode now reads VP8X with the alpha flag set
+        // (x/image >= 0.39 fixed the rejection these cases used to expect).
         _, err = Decode(bytes.NewReader(buf.Bytes()))
         if err == nil && tt.expectedErrorDecode != "" {
             t.Errorf("test %v: expected err as %v got %v", id, tt.expectedErrorDecode, err)

@@ -1,6 +1,6 @@
-[![Tests](https://github.com/KarpelesLab/gowebp/actions/workflows/test.yml/badge.svg)](https://github.com/KarpelesLab/gowebp/actions/workflows/test.yml)
-[![Coverage Status](https://coveralls.io/repos/github/KarpelesLab/gowebp/badge.svg?branch=main)](https://coveralls.io/github/KarpelesLab/gowebp?branch=main)
-[![Go Reference](https://pkg.go.dev/badge/github.com/KarpelesLab/gowebp.svg)](https://pkg.go.dev/github.com/KarpelesLab/gowebp)
+[![Tests](https://github.com/linzeyan/webp-go/actions/workflows/test.yml/badge.svg)](https://github.com/linzeyan/webp-go/actions/workflows/test.yml)
+[![Coverage Status](https://coveralls.io/repos/github/linzeyan/webp-go/badge.svg?branch=main)](https://coveralls.io/github/linzeyan/webp-go?branch=main)
+[![Go Reference](https://pkg.go.dev/badge/github.com/linzeyan/webp-go.svg)](https://pkg.go.dev/github.com/linzeyan/webp-go)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 # gowebp
@@ -23,7 +23,7 @@ static or in-animation).
 ## Installation
 
 ```bash
-go get github.com/KarpelesLab/gowebp
+go get github.com/linzeyan/webp-go
 ```
 
 ## Command-line tool
@@ -31,7 +31,7 @@ go get github.com/KarpelesLab/gowebp
 A `gowebp` binary converts images to WebP from the shell:
 
 ```bash
-go install github.com/KarpelesLab/gowebp/cmd/gowebp@latest
+go install github.com/linzeyan/webp-go/cmd/gowebp@latest
 ```
 
 ```bash
@@ -53,7 +53,7 @@ bits). Run `gowebp -h` for the full list.
 ### Lossless
 
 ```go
-import "github.com/KarpelesLab/gowebp"
+import "github.com/linzeyan/webp-go"
 
 f, _ := os.Create(name)
 defer f.Close()

@@ -4,7 +4,7 @@
 // VP8L. Animated GIFs become animated WebP. Multiple inputs are converted in
 // one run, and "-" streams via stdin/stdout.
 //
-//	go install github.com/KarpelesLab/gowebp/cmd/gowebp@latest
+//	go install github.com/linzeyan/webp-go/cmd/gowebp@latest
 //	gowebp photo.png                  # -> photo.webp (lossless)
 //	gowebp -lossy -q 80 photo.jpg     # -> photo.webp (lossy)
 //	gowebp anim.gif                   # -> anim.webp (animated)
@@ -26,7 +26,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/KarpelesLab/gowebp"
+	"github.com/linzeyan/webp-go"
 )
 
 func main() {
