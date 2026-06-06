@@ -5,3 +5,6 @@ testdata/*.webp
 *.test
 *.prof
 *.out
+
+# Compiled CLI binary (go build ./cmd/gowebp)
+/gowebp
