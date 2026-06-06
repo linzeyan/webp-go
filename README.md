@@ -26,6 +26,28 @@ static or in-animation).
 go get github.com/KarpelesLab/gowebp
 ```
 
+## Command-line tool
+
+A `gowebp` binary converts images to WebP from the shell:
+
+```bash
+go install github.com/KarpelesLab/gowebp/cmd/gowebp@latest
+```
+
+```bash
+gowebp photo.png                 # -> photo.webp (lossless, the default)
+gowebp -lossy -q 80 photo.jpg    # -> photo.webp (lossy VP8)
+gowebp anim.gif                  # -> anim.webp (animated GIF -> animated WebP)
+gowebp a.png b.png c.png         # batch: each -> .webp in place
+gowebp -o out/ *.png             # batch into a directory
+cat a.png | gowebp - > a.webp    # stdin -> stdout
+```
+
+Inputs may be PNG, JPEG, GIF, or WebP (auto-detected). Flags: `-o`
+(output file / directory / `-` for stdout), `-lossy`, `-lossless`,
+`-q` (quality 0–100), `-m` (method/effort 0–6), `-near` (near-lossless
+bits). Run `gowebp -h` for the full list.
+
 ## Usage
 
 ### Lossless
