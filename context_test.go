@@ -4,21 +4,22 @@ import (
     "bytes"
     "context"
     "image"
+    "sync/atomic"
     "testing"
 )
 
 // cancelAfterFirstPoll reports no error on its first Err() poll (so encoding
-// gets past the entry guard) and context.Canceled on every poll thereafter.
-// It deterministically exercises the per-frame / per-macroblock-row checks
-// that run *after* the entry guard.
+// gets past the entry guard) and context.Canceled on every poll thereafter. It
+// exercises the per-frame / per-macroblock-row checks that run *after* the
+// entry guard. Err() is atomic so it is safe under the concurrent frame
+// encoding in EncodeAll.
 type cancelAfterFirstPoll struct {
     context.Context
-    polls *int
+    polls *int64
 }
 
 func (c cancelAfterFirstPoll) Err() error {
-    *c.polls++
-    if *c.polls <= 1 {
+    if atomic.AddInt64(c.polls, 1) <= 1 {
         return nil
     }
     return context.Canceled
@@ -67,7 +68,7 @@ func TestEncodeAllContextCancelled(t *testing.T) {
 // the entry guard passes (poll 1) and the first row check trips (poll 2).
 func TestEncodeContextLossyCancelMidStream(t *testing.T) {
     img := generateTestImageNRGBA(16, 16, 1.0, false)
-    polls := 0
+    var polls int64
     ctx := cancelAfterFirstPoll{Context: context.Background(), polls: &polls}
 
     var buf bytes.Buffer
@@ -79,25 +80,23 @@ func TestEncodeContextLossyCancelMidStream(t *testing.T) {
     }
 }
 
-// TestEncodeAllContextCancelMidStream proves the per-frame poll fires beyond
-// the first frame: frame 0 encodes (poll 1 OK), frame 1 is cancelled (poll 2).
-// Uses lossless frames so the only ctx polls are the per-frame checks.
+// TestEncodeAllContextCancelMidStream proves the per-frame poll fires after the
+// entry guard: the first poll passes, later frame polls cancel. Frames encode
+// concurrently, so it only asserts the call returns context.Canceled (which
+// frame trips it is non-deterministic), not a poll count.
 func TestEncodeAllContextCancelMidStream(t *testing.T) {
     f := generateTestImageNRGBA(16, 16, 1.0, false)
     ani := &Animation{
-        Images:    []image.Image{f, f, f},
-        Durations: []uint{100, 100, 100},
-        Disposals: []uint{0, 0, 0},
+        Images:    []image.Image{f, f, f, f, f},
+        Durations: []uint{100, 100, 100, 100, 100},
+        Disposals: []uint{0, 0, 0, 0, 0},
     }
-    polls := 0
+    var polls int64
     ctx := cancelAfterFirstPoll{Context: context.Background(), polls: &polls}
 
     var buf bytes.Buffer
     if err := EncodeAllContext(ctx, &buf, ani, nil); err != context.Canceled {
         t.Fatalf("EncodeAllContext err = %v, want context.Canceled", err)
-    }
-    if polls < 2 {
-        t.Errorf("polls = %d, want >= 2 (frame 0 OK then frame 1 cancelled)", polls)
     }
 }
 

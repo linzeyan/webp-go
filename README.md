@@ -136,7 +136,9 @@ smaller or higher-quality output.
 | 6      | Adds trailing-coefficient trellis trim           | helps on high-freq content |
 
 Encoding is goroutine-safe: each `Encode`/`EncodeAll` call is
-self-contained and has no shared mutable state.
+self-contained and has no shared mutable state. `EncodeAll` also encodes
+its frames concurrently (up to `GOMAXPROCS`), so multi-frame animations
+scale across cores while producing byte-identical output.
 
 ## Benchmarks
 

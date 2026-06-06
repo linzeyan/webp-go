@@ -109,6 +109,32 @@ func BenchmarkEncodePNGBaseline(b *testing.B) {
 	}
 }
 
+// BenchmarkEncodeAll measures animation encoding, which fans frames out across
+// goroutines. Run with -cpu=1,8 to see the cross-frame parallel speedup; uses
+// synthetic frames so it needs no testdata.
+func BenchmarkEncodeAll(b *testing.B) {
+    const frames = 16
+    ani := &Animation{
+        Durations: make([]uint, frames),
+        Disposals: make([]uint, frames),
+    }
+    for i := 0; i < frames; i++ {
+        ani.Images = append(ani.Images, generateTestImageNRGBA(128, 128, float64(i+1)/4, false))
+        ani.Durations[i] = 100
+    }
+
+    var buf bytes.Buffer
+    b.ReportAllocs()
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        buf.Reset()
+        if err := EncodeAll(&buf, ani, nil); err != nil {
+            b.Fatal(err)
+        }
+    }
+    b.ReportMetric(float64(buf.Len()), "bytes/anim")
+}
+
 func loadBenchPNG(path string) (image.Image, error) {
 	f, err := os.Open(path)
 	if err != nil {

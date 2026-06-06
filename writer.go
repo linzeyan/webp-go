@@ -7,6 +7,8 @@ import (
     "io"
     "bytes"
     "context"
+    "runtime"
+    "sync"
     "encoding/binary"
     //------------------------------
     //imaging
@@ -447,57 +449,38 @@ func writeFrames(ctx context.Context, ani *Animation, o *Options) (*bytes.Buffer
     if o != nil {
         method = o.Method
     }
+    nearLossless := nearLosslessLevel(o)
+
+    // Each frame's payload is encoded independently (frame encodes share no
+    // mutable state), so they run concurrently. The ANMF stream is then
+    // assembled in frame order, leaving the output byte-identical to a serial
+    // run.
+    n := len(ani.Images)
+    payloads := make([][]byte, n)
+    alphas := make([]bool, n)
+    err := parallelFor(ctx, n, func(i int) error {
+        payload, alpha, err := encodeFramePayload(ctx, ani.Images[i], lossy, quality, method, nearLossless)
+        if err != nil {
+            return err
+        }
+        payloads[i] = payload
+        alphas[i] = alpha
+        return nil
+    })
+    if err != nil {
+        return nil, false, err
+    }
 
     buf := &bytes.Buffer{}
-
     var hasAlpha bool
     for i, img := range ani.Images {
-        if err := ctx.Err(); err != nil {
-            return nil, false, err
-        }
-
-        var framePayload bytes.Buffer
-        var alpha bool
-
-        if lossy {
-            // Lossy animation frame: optional ALPH (if image has alpha)
-            // followed by a VP8 color chunk, both wrapped in the ANMF.
-            alphaPlane := vp8enc.ExtractAlpha(img)
-            if alphaPlane != nil {
-                writeChunkALPH(&framePayload, img.Bounds(), alphaPlane)
-                alpha = true
-            }
-            var vp8 bytes.Buffer
-            if err := vp8enc.EncodeFrameContext(ctx, &vp8, img, vp8enc.EncodeOptions{
-                Quality: quality,
-                Method:  method,
-            }); err != nil {
-                return nil, false, err
-            }
-            writeChunkVP8(&framePayload, vp8.Bytes())
-        } else {
-            stream, a, err := writeBitStream(img, method, nearLosslessLevel(o))
-            if err != nil {
-                return nil, false, err
-            }
-            // VP8L sub-chunk inside ANMF. Use the same fourcc/size/pad
-            // pattern as writeChunkVP8 for consistency.
-            framePayload.Write([]byte("VP8L"))
-            binary.Write(&framePayload, binary.LittleEndian, uint32(stream.Len()))
-            framePayload.Write(stream.Bytes())
-            if stream.Len()&1 == 1 {
-                framePayload.WriteByte(0)
-            }
-            alpha = a
-        }
-
-        hasAlpha = hasAlpha || alpha
+        hasAlpha = hasAlpha || alphas[i]
 
         w := &bitWriter{Buffer: buf}
         w.writeBytes([]byte("ANMF"))
         // ANMF payload = 16-byte frame header + framePayload (which
         // already contains its own sub-chunk headers + padding).
-        w.writeBits(uint64(16+framePayload.Len()), 32)
+        w.writeBits(uint64(16+len(payloads[i])), 32)
 
         // WebP specs requires frame offsets to be divided by 2
         w.writeBits(uint64(img.Bounds().Min.X/2), 24)
@@ -511,10 +494,103 @@ func writeFrames(ctx context.Context, ani *Animation, o *Options) (*bytes.Buffer
         w.writeBits(uint64(0), 1)
         w.writeBits(uint64(0), 6)
 
-        w.Buffer.Write(framePayload.Bytes())
+        w.Buffer.Write(payloads[i])
     }
 
     return buf, hasAlpha, nil
+}
+
+// encodeFramePayload encodes a single animation frame into the bytes that go
+// inside its ANMF chunk (an optional ALPH chunk plus a VP8/VP8L sub-chunk). It
+// holds no shared state, so writeFrames can call it from many goroutines.
+func encodeFramePayload(ctx context.Context, img image.Image, lossy bool, quality float32, method, nearLossless int) ([]byte, bool, error) {
+    var framePayload bytes.Buffer
+    var alpha bool
+
+    if lossy {
+        // Lossy animation frame: optional ALPH (if image has alpha) followed
+        // by a VP8 color chunk, both wrapped in the ANMF.
+        alphaPlane := vp8enc.ExtractAlpha(img)
+        if alphaPlane != nil {
+            writeChunkALPH(&framePayload, img.Bounds(), alphaPlane)
+            alpha = true
+        }
+        var vp8 bytes.Buffer
+        if err := vp8enc.EncodeFrameContext(ctx, &vp8, img, vp8enc.EncodeOptions{
+            Quality: quality,
+            Method:  method,
+        }); err != nil {
+            return nil, false, err
+        }
+        writeChunkVP8(&framePayload, vp8.Bytes())
+    } else {
+        stream, a, err := writeBitStream(img, method, nearLossless)
+        if err != nil {
+            return nil, false, err
+        }
+        // VP8L sub-chunk inside ANMF. Use the same fourcc/size/pad pattern as
+        // writeChunkVP8 for consistency.
+        framePayload.Write([]byte("VP8L"))
+        binary.Write(&framePayload, binary.LittleEndian, uint32(stream.Len()))
+        framePayload.Write(stream.Bytes())
+        if stream.Len()&1 == 1 {
+            framePayload.WriteByte(0)
+        }
+        alpha = a
+    }
+
+    return framePayload.Bytes(), alpha, nil
+}
+
+// parallelFor runs fn(0..n-1) across up to GOMAXPROCS worker goroutines and
+// returns the first error. fn must only touch state indexed by its argument
+// (no cross-index sharing), which keeps the calls data-race free. ctx is polled
+// before each item so a cancelled context aborts the remaining frames; a single
+// item runs inline without spawning goroutines.
+func parallelFor(ctx context.Context, n int, fn func(i int) error) error {
+    if n <= 0 {
+        return nil
+    }
+    if n == 1 {
+        if err := ctx.Err(); err != nil {
+            return err
+        }
+        return fn(0)
+    }
+
+    workers := runtime.GOMAXPROCS(0)
+    if workers > n {
+        workers = n
+    }
+
+    errs := make([]error, n)
+    idx := make(chan int)
+    var wg sync.WaitGroup
+    for w := 0; w < workers; w++ {
+        wg.Add(1)
+        go func() {
+            defer wg.Done()
+            for i := range idx {
+                if err := ctx.Err(); err != nil {
+                    errs[i] = err
+                    continue
+                }
+                errs[i] = fn(i)
+            }
+        }()
+    }
+    for i := 0; i < n; i++ {
+        idx <- i
+    }
+    close(idx)
+    wg.Wait()
+
+    for _, err := range errs {
+        if err != nil {
+            return err
+        }
+    }
+    return nil
 }
 
 // losslessEffort maps Options to the VP8L encoder effort. 0 (the default and
