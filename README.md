@@ -28,7 +28,10 @@ go get github.com/linzeyan/webp-go
 
 ## Command-line tool
 
-A `gowebp` binary converts images to WebP from the shell:
+A `gowebp` binary converts images to WebP from the shell. Pre-built
+binaries for Linux, macOS, and Windows are attached to each
+[release](https://github.com/linzeyan/webp-go/releases), or install from
+source:
 
 ```bash
 go install github.com/linzeyan/webp-go/cmd/gowebp@latest
