@@ -67,7 +67,7 @@ func webpChunkIDs(t *testing.T, data []byte) []string {
 
 func TestConvertLosslessRoundtrip(t *testing.T) {
 	src := gradient(20, 16)
-	out, err := convert(pngBytes(t, src), &gowebp.Options{})
+	out, err := convert(pngBytes(t, src), &gowebp.Options{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestConvertLosslessRoundtrip(t *testing.T) {
 }
 
 func TestConvertLossy(t *testing.T) {
-	out, err := convert(pngBytes(t, gradient(32, 32)), &gowebp.Options{Lossy: true, Quality: 75, Method: 4})
+	out, err := convert(pngBytes(t, gradient(32, 32)), &gowebp.Options{Lossy: true, Quality: 75, Method: 4}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestConvertAnimatedGIF(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := convert(buf.Bytes(), &gowebp.Options{})
+	out, err := convert(buf.Bytes(), &gowebp.Options{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

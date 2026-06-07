@@ -77,7 +77,7 @@ func TestGifConfigFallback(t *testing.T) {
 }
 
 func TestConvertDecodeError(t *testing.T) {
-	if _, err := convert([]byte("not an image"), &gowebp.Options{}); err == nil {
+	if _, err := convert([]byte("not an image"), &gowebp.Options{}, 0); err == nil {
 		t.Error("expected a decode error for garbage input")
 	}
 }

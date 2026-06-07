@@ -49,7 +49,9 @@ cat a.png | gowebp - > a.webp    # stdin -> stdout
 Inputs may be PNG, JPEG, GIF, or WebP (auto-detected). Flags: `-o`
 (output file / directory / `-` for stdout), `-lossy`, `-lossless`,
 `-q` (quality 0–100), `-m` (method/effort 0–6), `-near` (near-lossless
-bits). Run `gowebp -h` for the full list.
+bits), and `-max-pixels` (reject inputs over N pixels — `width × height ×
+frames` — to guard against decompression bombs; `0` disables it). Run
+`gowebp -h` for the full list.
 
 ## Usage
 

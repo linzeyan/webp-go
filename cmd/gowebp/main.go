@@ -29,8 +29,56 @@ import (
 	"github.com/linzeyan/webp-go"
 )
 
+// defaultMaxPixels is the default -max-pixels budget: 16384*16384, the
+// encoder's own maximum single-image area. Inputs whose width*height (or, for
+// animations, width*height*frames) exceed it are rejected as decompression
+// bombs before they are decoded or composited.
+const defaultMaxPixels = 1 << 28
+
+// maxInputBytes caps how many bytes one input may have, bounding the memory a
+// never-ending stdin pipe or an oversized file can consume. A var so tests can
+// lower it.
+var maxInputBytes int64 = 256 << 20 // 256 MiB
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+// readInput reads one input — a file, or stdin when in == "-" — with a hard
+// byte cap so a huge or unbounded stream cannot exhaust memory.
+func readInput(in string, stdin io.Reader) ([]byte, error) {
+	r := stdin
+	if in != "-" {
+		f, err := os.Open(in)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		r = f
+	}
+	data, err := io.ReadAll(io.LimitReader(r, maxInputBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxInputBytes {
+		return nil, fmt.Errorf("input exceeds %d MiB", maxInputBytes>>20)
+	}
+	return data, nil
+}
+
+// checkPixels rejects an input whose decoded pixel volume (width*height*frames)
+// exceeds maxPixels, guarding against decompression bombs. maxPixels <= 0
+// disables the check. The comparison never overflows int64.
+func checkPixels(w, h, frames, maxPixels int64) error {
+	if maxPixels <= 0 || w < 1 || h < 1 || frames < 1 {
+		return nil
+	}
+	// "w > maxPixels/h" is "w*h > maxPixels" without overflowing. Once that
+	// passes, w*h <= maxPixels, so multiplying the frame check is safe too.
+	if w > maxPixels/h || w*h > maxPixels/frames {
+		return fmt.Errorf("input too large: %d x %d x %d frame(s) exceeds -max-pixels=%d", w, h, frames, maxPixels)
+	}
+	return nil
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -43,6 +91,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		quality  = fs.Float64("q", 75, "lossy quality, 0-100")
 		method   = fs.Int("m", -1, "method/effort 0-6 (default 4 lossy, 0 lossless)")
 		near     = fs.Int("near", 0, "near-lossless: max low R/G/B bits dropped, 0-5 (lossless)")
+		maxPix   = fs.Int64("max-pixels", defaultMaxPixels, "reject inputs over this many pixels (width*height*frames); 0 = unlimited")
 	)
 	fs.Usage = func() {
 		fmt.Fprint(stderr, "gowebp converts images (PNG/JPEG/GIF/WebP) to WebP.\n\n"+
@@ -101,7 +150,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	failed := 0
 	for _, in := range inputs {
-		if err := convertOne(in, *output, batch, o, stdin, stdout); err != nil {
+		if err := convertOne(in, *output, batch, o, *maxPix, stdin, stdout); err != nil {
 			fmt.Fprintf(stderr, "gowebp: %s: %v\n", inputName(in), err)
 			failed++
 		}
@@ -121,21 +170,13 @@ func inputName(in string) string {
 
 // convertOne reads one input, encodes it to WebP, and writes it to the
 // resolved destination.
-func convertOne(in, outFlag string, batch bool, o *gowebp.Options, stdin io.Reader, stdout io.Writer) error {
-	var (
-		data []byte
-		err  error
-	)
-	if in == "-" {
-		data, err = io.ReadAll(stdin)
-	} else {
-		data, err = os.ReadFile(in)
-	}
+func convertOne(in, outFlag string, batch bool, o *gowebp.Options, maxPixels int64, stdin io.Reader, stdout io.Writer) error {
+	data, err := readInput(in, stdin)
 	if err != nil {
 		return err
 	}
 
-	webp, err := convert(data, o)
+	webp, err := convert(data, o, maxPixels)
 	if err != nil {
 		return err
 	}
@@ -159,10 +200,14 @@ func convertOne(in, outFlag string, batch bool, o *gowebp.Options, stdin io.Read
 // convert decodes the input image bytes and re-encodes them as WebP. A
 // multi-frame GIF is converted to an animated WebP; everything else (including
 // single-frame GIFs) becomes a still WebP.
-func convert(data []byte, o *gowebp.Options) ([]byte, error) {
-	_, format, err := image.DecodeConfig(bytes.NewReader(data))
+func convert(data []byte, o *gowebp.Options, maxPixels int64) ([]byte, error) {
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
+	}
+	// Reject oversized inputs before decoding allocates the pixel buffer.
+	if err := checkPixels(int64(cfg.Width), int64(cfg.Height), 1, maxPixels); err != nil {
+		return nil, err
 	}
 
 	var buf bytes.Buffer
@@ -173,6 +218,11 @@ func convert(data []byte, o *gowebp.Options) ([]byte, error) {
 			return nil, fmt.Errorf("decode gif: %w", err)
 		}
 		if len(g.Image) > 1 {
+			// Each frame is composited onto a full-canvas RGBA, so bound the
+			// total pixel volume before the per-frame cloning in gifToAnimation.
+			if err := checkPixels(int64(cfg.Width), int64(cfg.Height), int64(len(g.Image)), maxPixels); err != nil {
+				return nil, err
+			}
 			if err := gowebp.EncodeAll(&buf, gifToAnimation(g), o); err != nil {
 				return nil, err
 			}

@@ -1030,6 +1030,11 @@ func encodeImageData(pixels []color.NRGBA, width, height, colorCacheBits int, sc
             for j := 0; j < 8; j++ {
                 // 1 << 20: sliding window size is 2^20 (1,048,576) per WebP specs.
                 // 120: reserved margin for offset adjustments.
+                //
+                // INVARIANT: capping the distance below 2^20 keeps the distance
+                // code (dis+120) < 2^20, so prefixEncodeCode returns a prefix
+                // <= 39 — exactly the size-40 histos[4] in computeHistograms.
+                // Do not loosen this bound without enlarging histos[4].
                 if cur == -1 || i - cur >= 1 << 20 - 120 {
                     break
                 }
@@ -1149,6 +1154,9 @@ func computeHistograms(pixels []int, colorCacheBits int) [][]int {
         make([]int, 256),
         make([]int, 256),
         make([]int, 256),
+        // Distance prefixes 0..39. Size 40 is safe only because the LZ77
+        // match-window cap (1<<20-120) in encodeImageData bounds the prefix
+        // to <= 39; keep the two in sync.
         make([]int, 40),
     }
 
