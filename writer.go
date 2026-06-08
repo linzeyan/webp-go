@@ -436,6 +436,17 @@ func writeFrames(ctx context.Context, ani *Animation, o *Options) (*bytes.Buffer
     }
 
     for i := 0; i < len(ani.Images); i++ {
+        // The ANMF header writes each frame offset as Min/2 in a 24-bit field;
+        // bitWriter.writeBits panics when the value does not fit. Min is
+        // caller-supplied (e.g. a SubImage origin) and may be negative or
+        // beyond the field range, so validate it before the offset is written.
+        b := ani.Images[i].Bounds()
+        if b.Min.X < 0 || b.Min.Y < 0 {
+            return nil, false, errors.New("frame offset must be non-negative")
+        }
+        if b.Min.X/2 >= 1 << 24 || b.Min.Y/2 >= 1 << 24 {
+            return nil, false, errors.New("frame offset out of range")
+        }
         ani.Durations[i] = min(ani.Durations[i], 1 << 24 - 1)
         ani.Disposals[i] = min(ani.Disposals[i], 1)
     }

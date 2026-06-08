@@ -273,10 +273,31 @@ func TestDecodeIgnoreAlphaFlagSearchChunk(t *testing.T) {
     //TEST: test what happens if VP8L is not directly after VP8X chunk
     data = append(data[:30], append(exif.Bytes(), data[30:]...)...)
     binary.LittleEndian.PutUint32(data[4: 8], uint32(len(data) - 8))
-    
+
     _, err = DecodeIgnoreAlphaFlag(bytes.NewReader(data))
     if err != nil {
         t.Errorf("expected err as nil got %v", err)
         return
+    }
+}
+
+func TestDecodeIgnoreAlphaFlagOversizedChunk(t *testing.T) {
+    // A VP8X container whose first chunk after the VP8X header declares an
+    // attacker-controlled size of 0xFFFFFFF0. On a 32-bit int build the old
+    // walker sign-converted that size to a negative number, drove the chunk
+    // index below zero and panicked on a negative slice bound; the uint64
+    // arithmetic must instead bail out and let the decoder reject the input.
+    // (On 64-bit int the sign conversion cannot occur, so this primarily
+    // guards the 32-bit path, but it must never panic on any architecture.)
+    data := make([]byte, 40)
+    copy(data[0: 4], "RIFF")
+    binary.LittleEndian.PutUint32(data[4: 8], uint32(len(data) - 8))
+    copy(data[8: 16], "WEBPVP8X")
+    copy(data[30: 34], "ANIM")
+    binary.LittleEndian.PutUint32(data[34: 38], 0xFFFFFFF0)
+
+    _, err := DecodeIgnoreAlphaFlag(bytes.NewReader(data))
+    if err == nil {
+        t.Errorf("expected an error decoding the crafted buffer got nil")
     }
 }

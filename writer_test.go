@@ -1697,3 +1697,48 @@ func TestFlatten(t *testing.T) {
         }
     }
 }
+
+func TestEncodeAllFrameOffsetErrors(t *testing.T) {
+    for id, tt := range []struct {
+        frame           image.Image
+        expectedMsg     string
+    }{
+        {
+            // A sub-image origin can be negative. The ANMF frame offset is
+            // written as Min/2 into a 24-bit unsigned field, so a negative
+            // origin must be rejected rather than panicking inside writeBits.
+            image.NewNRGBA(image.Rect(-100, 0, 100, 100)),
+            "frame offset must be non-negative",
+        },
+        {
+            // Min.X/2 == 1<<24 no longer fits the 24-bit offset field.
+            image.NewNRGBA(image.Rect(1 << 25, 0, 1 << 25 + 1, 100)),
+            "frame offset out of range",
+        },
+    }{
+        ani := &Animation {
+            Images: []image.Image{
+                tt.frame,
+            },
+            Durations: []uint {
+                100,
+            },
+            Disposals: []uint {
+                0,
+            },
+        }
+
+        b := &bytes.Buffer{}
+
+        err := EncodeAll(b, ani, nil)
+        if err == nil {
+            t.Errorf("test %v: expected error %v got nil", id, tt.expectedMsg)
+            continue
+        }
+
+        if err.Error() != tt.expectedMsg {
+            t.Errorf("test %v: expected error %v got %v", id, tt.expectedMsg, err)
+            continue
+        }
+    }
+}

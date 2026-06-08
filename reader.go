@@ -91,7 +91,7 @@ func DecodeIgnoreAlphaFlag(r io.Reader) (image.Image, error) {
     }
 
     if len(data) >= 30 && string(data[8:16]) == "WEBPVP8X" {
-        for i := 30; i + 8 < len(data); {
+        for i := 30; i + 8 <= len(data); {
             // Detect VP8L chunk, which handles transparency internally.
             // The x/image/webp package misinterprets this, so we clear the alpha flag.
             if string(data[i: i + 4]) == "VP8L" {
@@ -101,7 +101,16 @@ func DecodeIgnoreAlphaFlag(r io.Reader) (image.Image, error) {
                 break
             }
 
-            i += 8 + int(binary.LittleEndian.Uint32(data[i + 4: i + 8]))
+            // Advance to the next chunk in uint64 so an attacker-controlled
+            // 32-bit size can never sign-convert to a negative int (which on
+            // GOARCH=386/arm would drive i backward into a slice-bounds panic)
+            // or wrap the loop guard. Bail out if the next position does not
+            // strictly advance or would run past the data.
+            next := uint64(i) + 8 + uint64(binary.LittleEndian.Uint32(data[i + 4: i + 8]))
+            if next <= uint64(i) || next + 8 > uint64(len(data)) {
+                break
+            }
+            i = int(next)
         }
     }
 
