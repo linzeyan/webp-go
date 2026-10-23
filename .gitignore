@@ -8,3 +8,4 @@ testdata/*.webp
 
 # Compiled CLI binary (go build ./cmd/gowebp)
 /gowebp
+/docs
